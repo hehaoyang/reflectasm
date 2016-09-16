@@ -4,19 +4,45 @@ package com.esotericsoftware.reflectasm;
 import static org.objectweb.asm.Opcodes.*;
 
 import java.lang.reflect.Field;
+import java.util.HashMap;
 
-import org.objectweb.asm.AnnotationVisitor;
 import org.objectweb.asm.ClassWriter;
-import org.objectweb.asm.FieldVisitor;
 import org.objectweb.asm.Label;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 
 public abstract class FieldAccess {
-	static private AccessClassLoader loader = new AccessClassLoader();
+        // fixme::completeness -- i'm thinking that the ClassLoader should probably correspond to the type
+        //   being accessed, ie type.getClassLoader() in FieldAccess.get()
+//	static AccessClassLoader loader = new AccessClassLoader( FieldAccess.class.getClassLoader() );
+        static final HashMap<ClassLoader,AccessClassLoader> loaders = new HashMap();
 
-	static public FieldAccess get (Class type) {
+        static AccessClassLoader getLoader(Class type) {
+                ClassLoader parent = type.getClassLoader();
+                AccessClassLoader loader;
+                synchronized(loaders) { loader = loaders.get( parent ); }
+                if (loader == null) {
+                    // fixme::concurent -- should probably synchronize
+                    loader = new AccessClassLoader( parent );
+                    synchronized(loaders) { loaders.put( parent, loader ); }
+                }
+                return loader;
+        }
+
+
+
+        public static interface LoaderFactory {
+            public AccessClassLoader get(Class type);
+            public LoaderFactory setLog(AccessClassLoader.Logable logger);
+        }
+
+	static public FieldAccess get (Class type,LoaderFactory factory) {
+
+                AccessClassLoader loader = factory == null
+                        ? getLoader( type )
+                        : factory.get( type );
+
 		Field[] fields = type.getFields();
 		String className = type.getName();
 		String accessClassName = className + "FieldAccess";
@@ -193,10 +219,16 @@ public abstract class FieldAccess {
 			}
 			cw.visitEnd();
 			byte[] data = cw.toByteArray();
-			accessClass = loader.defineClass(accessClassName, data);
+//                        try {
+                            accessClass = loader.defineClass( accessClassName, data );
+//                        }                        catch(Exception ex) {
+//                            System.out.format( "FA::define failed -- %s using %s\n", accessClassName, loader );
+//                            throw ex;
+//                        }
 		}
 		try {
 			FieldAccess access = (FieldAccess)accessClass.newInstance();
+                        Class fac = FieldAccess.class;
 			access.fields = fields;
 			return access;
 		} catch (Exception ex) {
